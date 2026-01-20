@@ -44,7 +44,7 @@ var colorPresets = []ColorPreset{
 	{"Pink", color.RGBA{255, 100, 180, 255}, color.RGBA{127, 50, 90, 255}, color.RGBA{255, 100, 180, 80}},
 	{"Gold", color.RGBA{255, 215, 0, 255}, color.RGBA{127, 107, 0, 255}, color.RGBA{255, 215, 0, 80}},
 	{"White", color.RGBA{240, 240, 240, 255}, color.RGBA{120, 120, 120, 255}, color.RGBA{240, 240, 240, 80}},
-	// New vibrant colors
+	// Vibrant colors
 	{"Neon Red", color.RGBA{255, 50, 50, 255}, color.RGBA{180, 25, 25, 255}, color.RGBA{255, 50, 50, 100}},
 	{"Electric Blue", color.RGBA{30, 144, 255, 255}, color.RGBA{15, 72, 127, 255}, color.RGBA{30, 144, 255, 100}},
 	{"Lime", color.RGBA{180, 255, 0, 255}, color.RGBA{90, 127, 0, 255}, color.RGBA{180, 255, 0, 80}},
@@ -60,6 +60,19 @@ var colorPresets = []ColorPreset{
 	{"Fire", color.RGBA{255, 80, 0, 255}, color.RGBA{200, 40, 0, 255}, color.RGBA{255, 120, 0, 100}},
 	{"Ice", color.RGBA{180, 220, 255, 255}, color.RGBA{100, 150, 200, 255}, color.RGBA{200, 230, 255, 80}},
 	{"Lava", color.RGBA{255, 50, 0, 255}, color.RGBA{180, 20, 0, 255}, color.RGBA{255, 100, 0, 100}},
+	// Two-tone color themes (contrasting line/mirror colors)
+	{"Cyber", color.RGBA{0, 255, 255, 255}, color.RGBA{255, 0, 128, 255}, color.RGBA{0, 255, 255, 80}},           // Cyan line, hot pink mirror
+	{"Neon Night", color.RGBA{255, 20, 147, 255}, color.RGBA{0, 255, 127, 255}, color.RGBA{255, 20, 147, 80}},    // Deep pink line, spring green mirror
+	{"Electric", color.RGBA{255, 255, 0, 255}, color.RGBA{138, 43, 226, 255}, color.RGBA{255, 255, 0, 80}},       // Yellow line, blue-violet mirror
+	{"Toxic", color.RGBA{57, 255, 20, 255}, color.RGBA{148, 0, 211, 255}, color.RGBA{57, 255, 20, 80}},           // Neon green line, dark violet mirror
+	{"Bloodmoon", color.RGBA{220, 20, 60, 255}, color.RGBA{255, 165, 0, 255}, color.RGBA{220, 20, 60, 80}},       // Crimson line, orange mirror
+	{"Arctic", color.RGBA{135, 206, 250, 255}, color.RGBA{255, 182, 193, 255}, color.RGBA{135, 206, 250, 80}},    // Light sky blue line, light pink mirror
+	{"Synthwave", color.RGBA{255, 0, 255, 255}, color.RGBA{0, 191, 255, 255}, color.RGBA{255, 0, 255, 80}},       // Magenta line, deep sky blue mirror
+	{"Autumn", color.RGBA{255, 140, 0, 255}, color.RGBA{139, 69, 19, 255}, color.RGBA{255, 140, 0, 80}},          // Dark orange line, saddle brown mirror
+	{"Vaporwave", color.RGBA{255, 105, 180, 255}, color.RGBA{64, 224, 208, 255}, color.RGBA{255, 105, 180, 80}},  // Hot pink line, turquoise mirror
+	{"Retrowave", color.RGBA{255, 215, 0, 255}, color.RGBA{255, 20, 147, 255}, color.RGBA{255, 215, 0, 80}},      // Gold line, deep pink mirror
+	{"Matrix", color.RGBA{0, 255, 65, 255}, color.RGBA{0, 128, 0, 255}, color.RGBA{0, 255, 65, 80}},              // Bright green line, dark green mirror
+	{"Twilight", color.RGBA{148, 0, 211, 255}, color.RGBA{255, 140, 0, 255}, color.RGBA{148, 0, 211, 80}},        // Dark violet line, dark orange mirror
 	// Special animated
 	{"Rainbow", color.RGBA{255, 0, 0, 255}, color.RGBA{0, 0, 255, 255}, color.RGBA{255, 255, 0, 80}}, // Cycles through hues
 }
@@ -78,6 +91,7 @@ type OverlaySettings struct {
 	Offset      float32 // Vertical offset between lines in pixels
 	FadeEnabled bool    // Fade distant overlay lines
 	TimeOffset  int     // Frame delay between overlays (creates trailing effect)
+	SyncLines   bool    // If true, all overlay lines use same spectrum (no overlap)
 }
 
 // IsometricSettings holds 3D isometric rendering settings
@@ -90,6 +104,10 @@ type IsometricSettings struct {
 	DepthFade     bool    // Fade distant layers
 	Rotation      float32 // Y-axis rotation angle (0-360)
 	RotationSpeed float32 // Rotation speed in degrees per frame
+	AutoRotate    bool    // Enable automatic rotation
+	ForwardMotion bool    // Enable forward motion effect (moving through landscape)
+	ForwardSpeed  float32 // Forward motion speed (-2.0 to 2.0)
+	ForwardOffset float32 // Current forward motion offset (internal)
 }
 
 // DeviceEntry represents a device in the dropdown
@@ -97,6 +115,20 @@ type DeviceEntry struct {
 	Name       string
 	IsLoopback bool
 	IsDefault  bool
+}
+
+// BeatDetector detects beats in audio based on energy levels
+type BeatDetector struct {
+	Enabled         bool      // Enable beat-reactive color changes
+	energyHistory   []float64 // Rolling history of bass energy
+	historySize     int       // Size of energy history buffer
+	historyIndex    int       // Current position in history buffer
+	threshold       float64   // Beat detection threshold (1.0-3.0)
+	cooldown        int       // Frames to wait between beats
+	cooldownCounter int       // Current cooldown counter
+	beatDetected    bool      // Was a beat detected this frame
+	beatIntensity   float64   // Intensity of the detected beat (0-1)
+	decayRate       float64   // How fast the beat intensity decays
 }
 
 // SettingsMenu holds the collapsible settings menu state
@@ -163,19 +195,30 @@ type Visualizer struct {
 	lineStyle    LineStyle
 	overlay      OverlaySettings
 	isometric    IsometricSettings
-	smoothCurves bool // Use smooth curve interpolation
-	frameCount   int  // For rainbow color animation
+	smoothCurves bool    // Use smooth curve interpolation
+	frameCount   int     // For rainbow color animation
+	damping      float64 // Damping factor to reduce reactivity (0.1 = very damped, 1.0 = full reactivity)
+
+	// Beat detection
+	beatDetector BeatDetector
+
+	// Visualization mode
+	vizMode int // 0 = normal line, 1 = spiral
 
 	// Collapsible settings menu
 	settingsMenu SettingsMenu
 	// Dial values (intermediate float64 for smooth control)
-	dialThickness   float64
-	dialGlowSize    float64
-	dialOverlayOff  float64
-	dialOverlayCnt  float64
-	dialDepthLayers float64
-	dialAngle       float64
-	dialSpacing     float64
+	dialThickness    float64
+	dialGlowSize     float64
+	dialOverlayOff   float64
+	dialOverlayCnt   float64
+	dialDepthLayers  float64
+	dialAngle        float64
+	dialSpacing      float64
+	dialRotation     float64 // Manual rotation control
+	dialRotSpeed     float64 // Rotation speed
+	dialForwardSpeed float64 // Forward motion speed
+	dialDamping      float64 // Damping/reactivity control
 
 	// Colors
 	bgColor       color.RGBA
@@ -219,11 +262,28 @@ func NewVisualizer(cfg *config.Config, configPath string) *Visualizer {
 
 		// Default overlay settings
 		overlay: OverlaySettings{
-			Count:       1,      // Single line by default
-			Offset:      30.0,   // 30 pixels between overlay lines
-			FadeEnabled: true,   // Fade distant lines
-			TimeOffset:  3,      // 3 frame delay between overlays
+			Count:       1,     // Single line by default
+			Offset:      30.0,  // 30 pixels between overlay lines
+			FadeEnabled: true,  // Fade distant lines
+			TimeOffset:  3,     // 3 frame delay between overlays
+			SyncLines:   true,  // Sync lines by default to prevent overlap
 		},
+
+		// Damping (reactivity reduction)
+		damping: 1.0, // Full reactivity by default
+
+		// Beat detection
+		beatDetector: BeatDetector{
+			Enabled:       false, // Disabled by default
+			energyHistory: make([]float64, 43), // ~43 frames at 60fps = ~0.7 seconds
+			historySize:   43,
+			threshold:     1.5,  // Beat threshold multiplier
+			cooldown:      8,    // Minimum frames between beats
+			decayRate:     0.15, // How fast beat intensity fades
+		},
+
+		// Visualization mode
+		vizMode: 0, // 0 = normal line
 
 		// Default isometric settings
 		isometric: IsometricSettings{
@@ -234,7 +294,11 @@ func NewVisualizer(cfg *config.Config, configPath string) *Visualizer {
 			ScaleFactor:   0.92,
 			DepthFade:     true,
 			Rotation:      0.0,
-			RotationSpeed: 0.5, // Slow rotation, 0.5 degrees per frame
+			RotationSpeed: 0.5,  // Slow rotation, 0.5 degrees per frame
+			AutoRotate:    true, // Auto-rotate enabled by default
+			ForwardMotion: false,
+			ForwardSpeed:  0.5,
+			ForwardOffset: 0.0,
 		},
 
 		// Settings menu
@@ -248,13 +312,17 @@ func NewVisualizer(cfg *config.Config, configPath string) *Visualizer {
 		},
 
 		// Initialize dial values
-		dialThickness:   2.0,
-		dialGlowSize:    3.0,
-		dialOverlayOff:  30.0,
-		dialOverlayCnt:  1.0,
-		dialDepthLayers: 6.0,
-		dialAngle:       30.0,
-		dialSpacing:     25.0,
+		dialThickness:    2.0,
+		dialGlowSize:     3.0,
+		dialOverlayOff:   30.0,
+		dialOverlayCnt:   1.0,
+		dialDepthLayers:  6.0,
+		dialAngle:        30.0,
+		dialSpacing:      25.0,
+		dialRotation:     0.0,
+		dialRotSpeed:     0.5,
+		dialForwardSpeed: 0.0, // 0 = no motion (center position)
+		dialDamping:      1.0, // Full reactivity
 
 		// Colors matching Python version
 		bgColor:       color.RGBA{10, 10, 15, 255},
@@ -292,6 +360,9 @@ func (v *Visualizer) SetDeviceList(list *audio.DeviceList) {
 		})
 	}
 
+	// Track where loopback devices start
+	loopbackStartIdx := len(v.devices)
+
 	// Add playback devices as loopback options (system audio capture)
 	for _, dev := range list.PlaybackDevices {
 		v.devices = append(v.devices, DeviceEntry{
@@ -299,6 +370,18 @@ func (v *Visualizer) SetDeviceList(list *audio.DeviceList) {
 			IsLoopback: true,
 			IsDefault:  dev.IsDefault,
 		})
+	}
+
+	// Default to first loopback (output) device, or default output device if available
+	if len(list.PlaybackDevices) > 0 {
+		// Try to find the default playback device
+		v.selectedDevice = loopbackStartIdx // Default to first loopback
+		for i, dev := range list.PlaybackDevices {
+			if dev.IsDefault {
+				v.selectedDevice = loopbackStartIdx + i
+				break
+			}
+		}
 	}
 }
 
@@ -360,8 +443,9 @@ func (v *Visualizer) Update() error {
 			v.processor.SetNumBands(v.config.Display.BarCount)
 		}
 		v.lineStyle = LineStyle{Thickness: 2.0, ColorPreset: 0, GlowEnabled: false, GlowSize: 3.0}
-		v.overlay = OverlaySettings{Count: 1, Offset: 30.0, FadeEnabled: true, TimeOffset: 3}
-		v.isometric = IsometricSettings{Enabled: false, DepthLayers: 6, DepthSpacing: 25.0, Angle: 30.0, ScaleFactor: 0.92, DepthFade: true, Rotation: 0, RotationSpeed: 0.5}
+		v.overlay = OverlaySettings{Count: 1, Offset: 30.0, FadeEnabled: true, TimeOffset: 3, SyncLines: true}
+		v.isometric = IsometricSettings{Enabled: false, DepthLayers: 6, DepthSpacing: 25.0, Angle: 30.0, ScaleFactor: 0.92, DepthFade: true, Rotation: 0, RotationSpeed: 0.5, AutoRotate: true, ForwardMotion: false, ForwardSpeed: 0.5, ForwardOffset: 0}
+		v.damping = 1.0
 		v.freqShift = 0
 		v.numBands = v.config.Display.BarCount
 		v.smoothCurves = true
@@ -373,6 +457,10 @@ func (v *Visualizer) Update() error {
 		v.dialDepthLayers = 6.0
 		v.dialAngle = 30.0
 		v.dialSpacing = 25.0
+		v.dialRotation = 0.0
+		v.dialRotSpeed = 0.5
+		v.dialForwardSpeed = 0.0
+		v.dialDamping = 1.0
 		v.resizeSpectrumBuffers(v.numBands)
 		v.showStatus("Reset to defaults")
 	}
@@ -389,12 +477,20 @@ func (v *Visualizer) Update() error {
 		v.showStatus("Isometric 3D: " + boolToOnOff(v.isometric.Enabled))
 	}
 
-	// Update isometric rotation (animate Y-axis rotation)
-	if v.isometric.Enabled {
+	// Update isometric rotation (animate Y-axis rotation) if auto-rotate is enabled
+	if v.isometric.Enabled && v.isometric.AutoRotate {
 		v.isometric.Rotation += v.isometric.RotationSpeed
 		if v.isometric.Rotation >= 360 {
 			v.isometric.Rotation -= 360
 		}
+		if v.isometric.Rotation < 0 {
+			v.isometric.Rotation += 360
+		}
+	}
+
+	// Update forward motion offset
+	if v.isometric.Enabled && v.isometric.ForwardMotion {
+		v.isometric.ForwardOffset += v.isometric.ForwardSpeed
 	}
 
 	// Isometric controls (when in isometric mode)
@@ -475,6 +571,29 @@ func (v *Visualizer) Update() error {
 			v.overlay.Count = int(math.Min(50, float64(v.overlay.Count+1)))
 		}
 		v.showStatus(fmt.Sprintf("Overlay lines: %d", v.overlay.Count))
+	}
+
+	// Toggle SyncLines: Y (makes all overlay lines react identically, preventing overlap)
+	if inpututil.IsKeyJustPressed(ebiten.KeyY) {
+		v.overlay.SyncLines = !v.overlay.SyncLines
+		if v.overlay.SyncLines {
+			v.showStatus("Overlay sync: ON (lines move together)")
+		} else {
+			v.showStatus("Overlay sync: OFF (lines trail)")
+		}
+	}
+
+	// Toggle beat detection: T (tempo/beat reactive colors)
+	if inpututil.IsKeyJustPressed(ebiten.KeyT) {
+		v.beatDetector.Enabled = !v.beatDetector.Enabled
+		v.showStatus("Beat detection: " + boolToOnOff(v.beatDetector.Enabled))
+	}
+
+	// Toggle visualization mode: V (cycle through modes)
+	if inpututil.IsKeyJustPressed(ebiten.KeyV) {
+		v.vizMode = (v.vizMode + 1) % 2 // 0=line, 1=spiral
+		modes := []string{"Line", "Spiral"}
+		v.showStatus("Viz mode: " + modes[v.vizMode])
 	}
 
 	// Overlay offset: Up/Down arrows (when style panel is open)
@@ -699,17 +818,28 @@ func (v *Visualizer) handleSettingsMenu() {
 }
 
 // getDialControls returns the list of dial controls for the settings menu
+// Dials are organized with defaults at center where applicable (bi-directional)
 func (v *Visualizer) getDialControls() []DialControl {
 	return []DialControl{
+		// Audio processing
 		{"Sensitivity", &v.config.Sensitivity.Sensitivity, 0.1, 5.0, 0.1, "%.1f"},
 		{"Smoothing", &v.config.Smoothing.AttackSpeed, 0.1, 1.0, 0.05, "%.2f"},
+		{"Damping", &v.dialDamping, 0.1, 1.0, 0.05, "%.2f"}, // Lower = less reactive
+		// Line style
 		{"Thickness", &v.dialThickness, 0.5, 8.0, 0.5, "%.1f"},
 		{"Glow Size", &v.dialGlowSize, 1.0, 8.0, 0.5, "%.1f"},
+		// Overlay
 		{"Overlays", &v.dialOverlayCnt, 1.0, 50.0, 1.0, "%.0f"},
 		{"Overlay Offset", &v.dialOverlayOff, 2.0, 60.0, 2.0, "%.0f"},
+		// Isometric
 		{"Depth Layers", &v.dialDepthLayers, 2.0, 30.0, 1.0, "%.0f"},
 		{"Iso Angle", &v.dialAngle, 15.0, 60.0, 5.0, "%.0f°"},
 		{"Iso Spacing", &v.dialSpacing, 10.0, 60.0, 5.0, "%.0f"},
+		// Rotation (bi-directional: center=0, goes -180 to +180)
+		{"Rotation", &v.dialRotation, -180.0, 180.0, 5.0, "%.0f°"},
+		{"Rot Speed", &v.dialRotSpeed, -2.0, 2.0, 0.1, "%.1f"},
+		// Forward motion (bi-directional: center=0, negative=backward, positive=forward)
+		{"Forward", &v.dialForwardSpeed, -2.0, 2.0, 0.1, "%.1f"},
 	}
 }
 
@@ -724,20 +854,35 @@ func (v *Visualizer) applyDialValue(dialIndex int) {
 		if v.processor != nil {
 			v.processor.SetSmoothing(v.config.Smoothing.AttackSpeed, v.config.Smoothing.DecaySpeed, v.config.Smoothing.RestDecay)
 		}
-	case 2: // Thickness
+	case 2: // Damping
+		v.damping = v.dialDamping
+	case 3: // Thickness
 		v.lineStyle.Thickness = float32(v.dialThickness)
-	case 3: // Glow Size
+	case 4: // Glow Size
 		v.lineStyle.GlowSize = float32(v.dialGlowSize)
-	case 4: // Overlays
+	case 5: // Overlays
 		v.overlay.Count = int(v.dialOverlayCnt)
-	case 5: // Overlay Offset
+	case 6: // Overlay Offset
 		v.overlay.Offset = float32(v.dialOverlayOff)
-	case 6: // Depth Layers
+	case 7: // Depth Layers
 		v.isometric.DepthLayers = int(v.dialDepthLayers)
-	case 7: // Iso Angle
+	case 8: // Iso Angle
 		v.isometric.Angle = float32(v.dialAngle)
-	case 8: // Iso Spacing
+	case 9: // Iso Spacing
 		v.isometric.DepthSpacing = float32(v.dialSpacing)
+	case 10: // Rotation (manual)
+		v.isometric.Rotation = float32(v.dialRotation)
+		v.isometric.AutoRotate = false // Disable auto-rotate when manually adjusting
+	case 11: // Rotation Speed
+		v.isometric.RotationSpeed = float32(v.dialRotSpeed)
+		// If speed is non-zero, enable auto-rotate
+		if v.dialRotSpeed != 0 {
+			v.isometric.AutoRotate = true
+		}
+	case 12: // Forward Speed
+		v.isometric.ForwardSpeed = float32(v.dialForwardSpeed)
+		// Enable forward motion if speed is non-zero
+		v.isometric.ForwardMotion = v.dialForwardSpeed != 0
 	}
 }
 
@@ -754,27 +899,41 @@ func (v *Visualizer) resetDialToDefault(dialIndex int) {
 		if v.processor != nil {
 			v.processor.SetSmoothing(0.8, v.config.Smoothing.DecaySpeed, v.config.Smoothing.RestDecay)
 		}
-	case 2: // Thickness
+	case 2: // Damping
+		v.dialDamping = 1.0
+		v.damping = 1.0
+	case 3: // Thickness
 		v.dialThickness = 2.0
 		v.lineStyle.Thickness = 2.0
-	case 3: // Glow Size
+	case 4: // Glow Size
 		v.dialGlowSize = 3.0
 		v.lineStyle.GlowSize = 3.0
-	case 4: // Overlays
+	case 5: // Overlays
 		v.dialOverlayCnt = 1.0
 		v.overlay.Count = 1
-	case 5: // Overlay Offset
+	case 6: // Overlay Offset
 		v.dialOverlayOff = 30.0
 		v.overlay.Offset = 30.0
-	case 6: // Depth Layers
+	case 7: // Depth Layers
 		v.dialDepthLayers = 6.0
 		v.isometric.DepthLayers = 6
-	case 7: // Iso Angle
+	case 8: // Iso Angle
 		v.dialAngle = 30.0
 		v.isometric.Angle = 30.0
-	case 8: // Iso Spacing
+	case 9: // Iso Spacing
 		v.dialSpacing = 25.0
 		v.isometric.DepthSpacing = 25.0
+	case 10: // Rotation
+		v.dialRotation = 0.0
+		v.isometric.Rotation = 0.0
+	case 11: // Rotation Speed
+		v.dialRotSpeed = 0.5
+		v.isometric.RotationSpeed = 0.5
+		v.isometric.AutoRotate = true
+	case 12: // Forward Speed
+		v.dialForwardSpeed = 0.0
+		v.isometric.ForwardSpeed = 0.0
+		v.isometric.ForwardMotion = false
 	}
 	v.showStatus("Reset to default")
 }
@@ -832,13 +991,67 @@ func (v *Visualizer) pollAudio() {
 				v.historyIndex = (v.historyIndex + 1) % len(v.spectrumHistory)
 			}
 
+			// Beat detection - analyze bass frequencies
+			if v.beatDetector.Enabled && len(v.spectrum) > 0 {
+				v.detectBeat(v.spectrum)
+			}
+
 			v.mu.Unlock()
 		}
 	default:
 	}
 
+	// Update beat intensity decay
+	if v.beatDetector.beatIntensity > 0 {
+		v.beatDetector.beatIntensity -= v.beatDetector.decayRate
+		if v.beatDetector.beatIntensity < 0 {
+			v.beatDetector.beatIntensity = 0
+		}
+	}
+
+	// Decrement beat cooldown
+	if v.beatDetector.cooldownCounter > 0 {
+		v.beatDetector.cooldownCounter--
+	}
+
 	// Increment frame counter for rainbow animation
 	v.frameCount++
+}
+
+// detectBeat analyzes the spectrum to detect beats based on bass energy
+func (v *Visualizer) detectBeat(spectrum []float64) {
+	// Calculate bass energy (first 1/8 of spectrum = low frequencies)
+	bassEnd := len(spectrum) / 8
+	if bassEnd < 1 {
+		bassEnd = 1
+	}
+
+	var bassEnergy float64
+	for i := 0; i < bassEnd; i++ {
+		bassEnergy += spectrum[i] * spectrum[i] // Use squared for energy
+	}
+	bassEnergy /= float64(bassEnd)
+
+	// Add to history
+	v.beatDetector.energyHistory[v.beatDetector.historyIndex] = bassEnergy
+	v.beatDetector.historyIndex = (v.beatDetector.historyIndex + 1) % v.beatDetector.historySize
+
+	// Calculate average energy from history
+	var avgEnergy float64
+	for _, e := range v.beatDetector.energyHistory {
+		avgEnergy += e
+	}
+	avgEnergy /= float64(v.beatDetector.historySize)
+
+	// Detect beat: current energy significantly higher than average
+	v.beatDetector.beatDetected = false
+	if v.beatDetector.cooldownCounter <= 0 && avgEnergy > 0.001 {
+		if bassEnergy > avgEnergy*v.beatDetector.threshold {
+			v.beatDetector.beatDetected = true
+			v.beatDetector.beatIntensity = 1.0
+			v.beatDetector.cooldownCounter = v.beatDetector.cooldown
+		}
+	}
 }
 
 func (v *Visualizer) Draw(screen *ebiten.Image) {
@@ -859,6 +1072,13 @@ func (v *Visualizer) Draw(screen *ebiten.Image) {
 	spectrum := make([]float64, len(v.spectrum))
 	copy(spectrum, v.spectrum)
 
+	// Apply damping to reduce reactivity
+	if v.damping < 1.0 {
+		for i := range spectrum {
+			spectrum[i] *= v.damping
+		}
+	}
+
 	// Get history spectrums for overlays
 	historySpectrums := make([][]float64, v.overlay.Count)
 	for i := 0; i < v.overlay.Count; i++ {
@@ -866,6 +1086,12 @@ func (v *Visualizer) Draw(screen *ebiten.Image) {
 		histIdx := (v.historyIndex - 1 - i*v.overlay.TimeOffset + len(v.spectrumHistory)) % len(v.spectrumHistory)
 		if histIdx >= 0 && histIdx < len(v.spectrumHistory) {
 			copy(historySpectrums[i], v.spectrumHistory[histIdx])
+		}
+		// Apply damping to history spectrums as well
+		if v.damping < 1.0 {
+			for j := range historySpectrums[i] {
+				historySpectrums[i][j] *= v.damping
+			}
 		}
 	}
 	v.mu.RUnlock()
@@ -877,8 +1103,10 @@ func (v *Visualizer) Draw(screen *ebiten.Image) {
 		} else {
 			// Standard 2D rendering with overlays
 			for i := v.overlay.Count - 1; i >= 0; i-- {
+				// Determine which spectrum to draw
+				// If SyncLines is enabled, all lines use the same current spectrum (no overlap)
 				spectrumToDraw := spectrum
-				if i > 0 && i < len(historySpectrums) {
+				if !v.overlay.SyncLines && i > 0 && i < len(historySpectrums) {
 					spectrumToDraw = historySpectrums[i]
 				}
 
@@ -933,9 +1161,31 @@ func (v *Visualizer) drawIsometric(screen *ebiten.Image, spectrum []float64, his
 			layerSpectrum = v.spectrumHistory[histIdx]
 		}
 
-		// Calculate depth offset and scale
-		depth := float32(layer) * v.isometric.DepthSpacing
-		scale := float32(math.Pow(float64(v.isometric.ScaleFactor), float64(layer)))
+		// Calculate depth offset and scale with forward motion
+		// Forward motion creates the effect of traveling through a 3D landscape
+		baseDepth := float32(layer) * v.isometric.DepthSpacing
+
+		// Apply forward motion offset - layers cycle through positions
+		var effectiveDepth float32
+		if v.isometric.ForwardMotion {
+			// Offset wraps around based on forward position
+			maxDepth := float32(v.isometric.DepthLayers) * v.isometric.DepthSpacing
+			effectiveDepth = baseDepth + v.isometric.ForwardOffset
+			// Wrap around to create continuous motion
+			for effectiveDepth >= maxDepth {
+				effectiveDepth -= maxDepth
+			}
+			for effectiveDepth < 0 {
+				effectiveDepth += maxDepth
+			}
+		} else {
+			effectiveDepth = baseDepth
+		}
+
+		depth := effectiveDepth
+		// Scale based on effective depth for proper perspective
+		effectiveLayer := effectiveDepth / v.isometric.DepthSpacing
+		scale := float32(math.Pow(float64(v.isometric.ScaleFactor), float64(effectiveLayer)))
 
 		// Base isometric offset
 		baseXOffset := depth * cosAngle * 0.3
@@ -946,10 +1196,14 @@ func (v *Visualizer) drawIsometric(screen *ebiten.Image, spectrum []float64, his
 		xOffset := baseXOffset*cosRotation - depth*sinRotation*0.15
 		yOffset := baseYOffset + depth*sinRotation*cosAngle*0.1
 
-		// Calculate alpha for depth fade
+		// Calculate alpha for depth fade (use effective layer for proper depth during forward motion)
 		alpha := uint8(255)
 		if v.isometric.DepthFade && v.isometric.DepthLayers > 1 {
-			alpha = uint8(255 - (200 * layer / v.isometric.DepthLayers))
+			fadeLayer := int(effectiveLayer)
+			if fadeLayer >= v.isometric.DepthLayers {
+				fadeLayer = v.isometric.DepthLayers - 1
+			}
+			alpha = uint8(255 - (200 * fadeLayer / v.isometric.DepthLayers))
 		}
 
 		// Get colors (glow now matches line color dynamically)
@@ -1104,6 +1358,16 @@ func (v *Visualizer) getOverlayColors(preset ColorPreset, overlayIndex int, alph
 		mirrorColor = hueToRGB(hue, 0.7, 0.5)
 	}
 
+	// Beat-reactive color shift: on beats, shift hue and increase brightness
+	if v.beatDetector.Enabled && v.beatDetector.beatIntensity > 0 {
+		intensity := v.beatDetector.beatIntensity
+
+		// Convert current color to HSV-like values and shift
+		// Simple approach: brighten and shift towards complementary color
+		lineColor = shiftColorOnBeat(lineColor, intensity)
+		mirrorColor = shiftColorOnBeat(mirrorColor, intensity)
+	}
+
 	// Derive glow color from the current line color (so it matches dynamically)
 	glowColor := deriveGlowColor(lineColor)
 
@@ -1111,6 +1375,41 @@ func (v *Visualizer) getOverlayColors(preset ColorPreset, overlayIndex int, alph
 	mirrorColor.A = alpha / 2
 	glowColor.A = alpha / 3
 	return lineColor, mirrorColor, glowColor
+}
+
+// shiftColorOnBeat shifts a color based on beat intensity
+func shiftColorOnBeat(c color.RGBA, intensity float64) color.RGBA {
+	// Brighten the color and shift hue slightly
+	brighten := 1.0 + intensity*0.5 // Up to 50% brighter
+
+	// Calculate new RGB values with brightening
+	r := float64(c.R) * brighten
+	g := float64(c.G) * brighten
+	b := float64(c.B) * brighten
+
+	// Also add a color shift: rotate RGB channels slightly based on intensity
+	shift := intensity * 0.3 // 30% shift at full intensity
+	newR := r*(1-shift) + b*shift
+	newG := g*(1-shift) + r*shift
+	newB := b*(1-shift) + g*shift
+
+	// Clamp values
+	if newR > 255 {
+		newR = 255
+	}
+	if newG > 255 {
+		newG = 255
+	}
+	if newB > 255 {
+		newB = 255
+	}
+
+	return color.RGBA{
+		R: uint8(newR),
+		G: uint8(newG),
+		B: uint8(newB),
+		A: c.A,
+	}
 }
 
 // deriveGlowColor creates a glow color from a line color
@@ -1348,37 +1647,73 @@ func (v *Visualizer) drawSettingsMenu(screen *ebiten.Image) {
 		vector.DrawFilledRect(screen, float32(sliderX), trackY, float32(sliderW), trackH, color.RGBA{30, 30, 35, 255}, false)
 		vector.StrokeRect(screen, float32(sliderX), trackY, float32(sliderW), trackH, 1, dimColor, false)
 
+		// Check if this is a bi-directional dial (has negative min or center at 0)
+		isBidirectional := dial.Min < 0 && dial.Max > 0
+
 		// Calculate fill ratio
 		ratio := (*dial.Value - dial.Min) / (dial.Max - dial.Min)
 		ratio = math.Max(0, math.Min(1, ratio))
-		fillW := float32(sliderW) * float32(ratio)
 
 		// Draw filled portion
 		dialFillColor := fillColor
 		if v.settingsMenu.ActiveDial == i {
 			dialFillColor = accentColor // Brighter when active
 		}
-		if fillW > 0 {
-			vector.DrawFilledRect(screen, float32(sliderX), trackY+1, fillW, trackH-2, dialFillColor, false)
-		}
 
-		// Draw handle
-		handleX := float32(sliderX) + fillW
-		handleW := float32(12)
-		handleH := float32(18)
-		handleY := trackY - (handleH-trackH)/2
-		handleColor := accentColor
-		if v.settingsMenu.ActiveDial == i {
-			// Brighten when active
-			handleColor = color.RGBA{
-				R: uint8(min(255, int(accentColor.R)+50)),
-				G: uint8(min(255, int(accentColor.G)+50)),
-				B: uint8(min(255, int(accentColor.B)+50)),
-				A: 255,
+		if isBidirectional {
+			// For bi-directional dials, fill from center
+			centerX := float32(sliderX) + float32(sliderW)/2
+			handleX := float32(sliderX) + float32(sliderW)*float32(ratio)
+
+			// Draw center mark
+			vector.StrokeLine(screen, centerX, trackY-2, centerX, trackY+trackH+2, 1, dimColor, false)
+
+			// Fill from center to handle position
+			if handleX > centerX {
+				vector.DrawFilledRect(screen, centerX, trackY+1, handleX-centerX, trackH-2, dialFillColor, false)
+			} else if handleX < centerX {
+				vector.DrawFilledRect(screen, handleX, trackY+1, centerX-handleX, trackH-2, dialFillColor, false)
 			}
+
+			// Draw handle
+			handleW := float32(12)
+			handleH := float32(18)
+			handleY := trackY - (handleH-trackH)/2
+			handleColor := accentColor
+			if v.settingsMenu.ActiveDial == i {
+				handleColor = color.RGBA{
+					R: uint8(min(255, int(accentColor.R)+50)),
+					G: uint8(min(255, int(accentColor.G)+50)),
+					B: uint8(min(255, int(accentColor.B)+50)),
+					A: 255,
+				}
+			}
+			vector.DrawFilledRect(screen, handleX-handleW/2, handleY, handleW, handleH, handleColor, false)
+			vector.StrokeRect(screen, handleX-handleW/2, handleY, handleW, handleH, 1, accentColor, false)
+		} else {
+			// Standard left-to-right fill
+			fillW := float32(sliderW) * float32(ratio)
+			if fillW > 0 {
+				vector.DrawFilledRect(screen, float32(sliderX), trackY+1, fillW, trackH-2, dialFillColor, false)
+			}
+
+			// Draw handle
+			handleX := float32(sliderX) + fillW
+			handleW := float32(12)
+			handleH := float32(18)
+			handleY := trackY - (handleH-trackH)/2
+			handleColor := accentColor
+			if v.settingsMenu.ActiveDial == i {
+				handleColor = color.RGBA{
+					R: uint8(min(255, int(accentColor.R)+50)),
+					G: uint8(min(255, int(accentColor.G)+50)),
+					B: uint8(min(255, int(accentColor.B)+50)),
+					A: 255,
+				}
+			}
+			vector.DrawFilledRect(screen, handleX-handleW/2, handleY, handleW, handleH, handleColor, false)
+			vector.StrokeRect(screen, handleX-handleW/2, handleY, handleW, handleH, 1, accentColor, false)
 		}
-		vector.DrawFilledRect(screen, handleX-handleW/2, handleY, handleW, handleH, handleColor, false)
-		vector.StrokeRect(screen, handleX-handleW/2, handleY, handleW, handleH, 1, accentColor, false)
 
 		// Draw value
 		valueStr := fmt.Sprintf(dial.Format, *dial.Value)
@@ -1575,6 +1910,7 @@ func (v *Visualizer) drawStylePanel(screen *ebiten.Image) {
 			"Overlay:",
 			fmt.Sprintf("  Lines: %d (O/Shift+O)", v.overlay.Count),
 			fmt.Sprintf("  Offset: %.0fpx (Up/Down)", v.overlay.Offset),
+			fmt.Sprintf("  Sync: %s (Y)", boolToOnOff(v.overlay.SyncLines)),
 		)
 	}
 
@@ -1712,11 +2048,12 @@ func main() {
 		log.Printf("Warning: Failed to enumerate devices: %v", err)
 	}
 
-	// Create audio capture
+	// Create audio capture - default to loopback (system audio) for better out-of-box experience
 	captureCfg := audio.CaptureConfig{
 		SampleRate: cfg.Audio.SampleRate,
 		ChunkSize:  cfg.Audio.ChunkSize,
 		DeviceName: cfg.Audio.Device,
+		Loopback:   true, // Default to loopback (output device) for system audio capture
 	}
 	capture, err := audio.NewCapture(captureCfg)
 	if err != nil {

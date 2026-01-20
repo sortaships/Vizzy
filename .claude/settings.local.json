@@ -15,7 +15,8 @@
       "Bash(export CGO_ENABLED=1:*)",
       "Bash(go doc:*)",
       "Bash(PATH=\"/c/msys64/mingw64/bin:$PATH\" CGO_ENABLED=1 go build:*)",
-      "Bash(PATH=\"/c/msys64/mingw64/bin:$PATH\" CGO_ENABLED=1 go test:*)"
+      "Bash(PATH=\"/c/msys64/mingw64/bin:$PATH\" CGO_ENABLED=1 go test:*)",
+      "Bash(go vet:*)"
     ]
   }
 }

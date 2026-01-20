@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"runtime"
 	"sync"
 
 	"github.com/gen2brain/malgo"
@@ -69,6 +70,13 @@ func (c *Capture) Start() error {
 	// Determine device type based on loopback setting
 	deviceType := malgo.Capture
 	if c.config.Loopback {
+		// On macOS, loopback capture is not natively supported by miniaudio
+		// Users need to install a virtual audio device like BlackHole or Soundflower
+		if runtime.GOOS == "darwin" {
+			// Try to use loopback anyway - it may work with virtual audio devices
+			// but warn that it might not capture system audio
+			fmt.Println("Note: macOS loopback capture requires a virtual audio device (BlackHole/Soundflower)")
+		}
 		deviceType = malgo.Loopback
 	}
 
@@ -138,9 +146,30 @@ func (c *Capture) Start() error {
 
 	device, err := malgo.InitDevice(c.context.Context, deviceConfig, deviceCallbacks)
 	if err != nil {
-		c.context.Uninit()
-		c.context.Free()
-		return fmt.Errorf("failed to initialize device: %w", err)
+		// On macOS, if loopback fails, try falling back to regular capture
+		if c.config.Loopback && runtime.GOOS == "darwin" {
+			fmt.Println("Loopback capture failed on macOS, falling back to microphone capture")
+			fmt.Println("For system audio capture on macOS, install BlackHole: https://existential.audio/blackhole/")
+			deviceConfig = malgo.DefaultDeviceConfig(malgo.Capture)
+			deviceConfig.Capture.Format = malgo.FormatF32
+			deviceConfig.Capture.Channels = 1
+			deviceConfig.SampleRate = uint32(c.config.SampleRate)
+			deviceConfig.PeriodSizeInFrames = uint32(c.config.ChunkSize)
+			deviceConfig.Periods = 2
+			c.isLoopback = false
+			c.deviceName = "Default (Microphone)"
+
+			device, err = malgo.InitDevice(c.context.Context, deviceConfig, deviceCallbacks)
+			if err != nil {
+				c.context.Uninit()
+				c.context.Free()
+				return fmt.Errorf("failed to initialize fallback device: %w", err)
+			}
+		} else {
+			c.context.Uninit()
+			c.context.Free()
+			return fmt.Errorf("failed to initialize device: %w", err)
+		}
 	}
 	c.device = device
 
