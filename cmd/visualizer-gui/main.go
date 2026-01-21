@@ -26,7 +26,7 @@ const (
 )
 
 // Visualization mode names
-var vizModeNames = []string{"Line", "Spiral", "Isometric"}
+var vizModeNames = []string{"Line", "Bars", "Rising", "Spiral", "Isometric", "Particles", "Circular", "Wave"}
 
 // ColorPreset represents a color scheme for the waveform
 type ColorPreset struct {
@@ -111,6 +111,94 @@ type IsometricSettings struct {
 	ForwardMotion bool    // Enable forward motion effect (moving through landscape)
 	ForwardSpeed  float32 // Forward motion speed (-2.0 to 2.0)
 	ForwardOffset float32 // Current forward motion offset (internal)
+}
+
+// BarSettings holds settings for the bar visualizer mode
+type BarSettings struct {
+	BarWidth     float32 // Width of each bar (0.5-1.0 as ratio of spacing)
+	GapWidth     float32 // Gap between bars in pixels
+	RoundedCaps  bool    // Use rounded tops on bars
+	Mirror       bool    // Mirror bars below center line
+	Gradient     bool    // Use gradient coloring based on amplitude
+	MinHeight    float32 // Minimum bar height in pixels
+	GlowEnabled  bool    // Enable glow effect on bars
+	GlowSize     float32 // Size of glow effect
+	Outline      bool    // Draw outline around bars
+	OutlineWidth float32 // Width of outline
+}
+
+// RisingSettings holds settings for the rising/falling line visualizer mode
+type RisingSettings struct {
+	Gravity      float32 // How fast the line falls (0.01-0.5)
+	MaxRise      float32 // Maximum rise speed (0.1-1.0)
+	Bounce       float32 // Bounce factor when hitting bottom (0-0.5)
+	TrailEnabled bool    // Show trail behind falling line
+	TrailLength  int     // Number of trail segments
+	TrailFade    float32 // How fast trail fades (0-1)
+	Peaks        bool    // Show peak markers
+	PeakHold     int     // Frames to hold peak before falling
+	PeakFallRate float32 // How fast peaks fall
+}
+
+// Particle represents a single particle in the particles visualizer
+type Particle struct {
+	X, Y     float32 // Position
+	VX, VY   float32 // Velocity
+	Life     float32 // Remaining life (0-1)
+	Size     float32 // Particle size
+	ColorIdx int     // Which frequency band spawned this (for coloring)
+}
+
+// ParticleSettings holds settings for the particles visualizer mode
+type ParticleSettings struct {
+	MaxParticles  int     // Maximum number of particles
+	SpawnRate     float32 // Particles spawned per frame per band (0.1-5)
+	Gravity       float32 // Gravity pull on particles
+	InitialSpeed  float32 // Initial upward velocity
+	SpeedVariance float32 // Random variance in speed
+	Spread        float32 // Horizontal spread angle
+	MinLife       float32 // Minimum particle lifetime
+	MaxLife       float32 // Maximum particle lifetime
+	SizeMin       float32 // Minimum particle size
+	SizeMax       float32 // Maximum particle size
+	FadeOut       bool    // Fade particles as they age
+	Glow          bool    // Add glow effect to particles
+	Explosion     bool    // Burst mode - explode on beats
+}
+
+// CircularSettings holds settings for the circular/radial visualizer mode
+type CircularSettings struct {
+	InnerRadius   float32 // Inner radius of the circle
+	BarLength     float32 // Maximum bar length
+	BarWidth      float32 // Width of each bar
+	Rotation      float32 // Current rotation angle
+	RotationSpeed float32 // Rotation speed (degrees per frame)
+	Mirror        bool    // Draw bars both inward and outward
+	Dots          bool    // Use dots instead of bars
+	DotSize       float32 // Size of dots
+	Spiral        bool    // Spiral effect (offset based on frequency)
+	Rainbow       bool    // Use rainbow coloring around circle
+}
+
+// WaveSettings holds settings for the wave/ripple visualizer mode
+type WaveSettings struct {
+	MaxRings      int     // Maximum number of rings
+	RingSpeed     float32 // How fast rings expand
+	RingWidth     float32 // Width of each ring
+	Decay         float32 // How fast rings fade (0-1)
+	SpawnRate     float32 // Rings spawned per frame when active
+	ReactToBass   bool    // React primarily to bass frequencies
+	Fill          bool    // Fill rings instead of stroke
+	Wobble        bool    // Add wobble effect to rings
+	WobbleAmount  float32 // Amount of wobble
+	ColorByAge    bool    // Color rings based on age
+}
+
+// Ring represents a single expanding ring in the wave visualizer
+type Ring struct {
+	Radius    float32 // Current radius
+	Intensity float32 // Ring intensity (affects opacity and width)
+	Age       float32 // Age of ring (0-1, 1 = dead)
 }
 
 // DeviceEntry represents a device in the dropdown
@@ -204,15 +292,32 @@ type Visualizer struct {
 	lineStyle    LineStyle
 	overlay      OverlaySettings
 	isometric    IsometricSettings
-	smoothCurves bool    // Use smooth curve interpolation
-	frameCount   int     // For rainbow color animation
-	damping      float64 // Damping factor to reduce reactivity (0.1 = very damped, 1.0 = full reactivity)
+	barSettings  BarSettings      // Bar visualizer settings
+	rising       RisingSettings   // Rising line visualizer settings
+	particles    ParticleSettings // Particle visualizer settings
+	circular     CircularSettings // Circular visualizer settings
+	wave         WaveSettings     // Wave visualizer settings
+	smoothCurves bool             // Use smooth curve interpolation
+	frameCount   int              // For rainbow color animation
+	damping      float64          // Damping factor to reduce reactivity (0.1 = very damped, 1.0 = full reactivity)
+
+	// Rising line state (velocities and positions for physics simulation)
+	risingPositions  []float64 // Current Y positions for each frequency band
+	risingVelocities []float64 // Current velocities for each frequency band
+	risingPeaks      []float64 // Peak positions for each band
+	risingPeakHold   []int     // Frames remaining to hold peak
+
+	// Particles state
+	particleList []Particle // Active particles
+
+	// Wave state
+	rings []Ring // Active rings
 
 	// Beat detection
 	beatDetector BeatDetector
 
 	// Visualization mode
-	vizMode int // 0 = normal line, 1 = spiral
+	vizMode int // 0=Line, 1=Bars, 2=Rising, 3=Spiral, 4=Isometric, 5=Particles, 6=Circular, 7=Wave
 
 	// Collapsible settings menu
 	settingsMenu SettingsMenu
@@ -230,6 +335,35 @@ type Visualizer struct {
 	dialDamping      float64 // Damping/reactivity control
 	dialFreqShift    float64 // Frequency shift control
 	dialBands        float64 // Number of frequency bands
+
+	// Bar mode dial values
+	dialBarWidth  float64
+	dialBarGap    float64
+	dialMinHeight float64
+
+	// Rising mode dial values
+	dialGravity     float64
+	dialBounce      float64
+	dialTrailLength float64
+	dialPeakHold    float64
+
+	// Particles mode dial values
+	dialParticleSpawn   float64
+	dialParticleGravity float64
+	dialParticleSpeed   float64
+	dialParticleLife    float64
+	dialParticleSize    float64
+
+	// Circular mode dial values
+	dialCircularRadius   float64
+	dialCircularBarLen   float64
+	dialCircularRotSpeed float64
+
+	// Wave mode dial values
+	dialWaveSpeed    float64
+	dialWaveWidth    float64
+	dialWaveDecay    float64
+	dialWaveWobble   float64
 
 	// Colors
 	bgColor       color.RGBA
@@ -312,6 +446,90 @@ func NewVisualizer(cfg *config.Config, configPath string) *Visualizer {
 			ForwardOffset: 0.0,
 		},
 
+		// Default bar visualizer settings
+		barSettings: BarSettings{
+			BarWidth:     0.8,   // 80% of spacing
+			GapWidth:     2.0,   // 2 pixels between bars
+			RoundedCaps:  true,  // Rounded tops
+			Mirror:       true,  // Mirror below center
+			Gradient:     true,  // Gradient coloring
+			MinHeight:    2.0,   // Minimum 2px height
+			GlowEnabled:  true,  // Glow enabled
+			GlowSize:     2.0,   // Glow size
+			Outline:      false, // No outline by default
+			OutlineWidth: 1.0,
+		},
+
+		// Default rising line settings
+		rising: RisingSettings{
+			Gravity:      0.08,  // Gravity pull
+			MaxRise:      0.6,   // Max rise speed
+			Bounce:       0.2,   // Bounce factor
+			TrailEnabled: true,  // Show trail
+			TrailLength:  8,     // Trail segments
+			TrailFade:    0.15,  // Trail fade rate
+			Peaks:        true,  // Show peaks
+			PeakHold:     30,    // Hold peak for ~0.5s
+			PeakFallRate: 0.02,  // Slow peak fall
+		},
+
+		// Rising line physics state
+		risingPositions:  make([]float64, cfg.Display.BarCount),
+		risingVelocities: make([]float64, cfg.Display.BarCount),
+		risingPeaks:      make([]float64, cfg.Display.BarCount),
+		risingPeakHold:   make([]int, cfg.Display.BarCount),
+
+		// Default particles settings
+		particles: ParticleSettings{
+			MaxParticles:  2000,
+			SpawnRate:     2.0,
+			Gravity:       0.15,
+			InitialSpeed:  8.0,
+			SpeedVariance: 3.0,
+			Spread:        0.8,
+			MinLife:       0.5,
+			MaxLife:       2.0,
+			SizeMin:       2.0,
+			SizeMax:       6.0,
+			FadeOut:       true,
+			Glow:          true,
+			Explosion:     false,
+		},
+
+		// Particles state
+		particleList: make([]Particle, 0, 2000),
+
+		// Default circular settings
+		circular: CircularSettings{
+			InnerRadius:   80.0,
+			BarLength:     150.0,
+			BarWidth:      4.0,
+			Rotation:      0.0,
+			RotationSpeed: 0.5,
+			Mirror:        true,
+			Dots:          false,
+			DotSize:       8.0,
+			Spiral:        false,
+			Rainbow:       true,
+		},
+
+		// Default wave settings
+		wave: WaveSettings{
+			MaxRings:     30,
+			RingSpeed:    4.0,
+			RingWidth:    3.0,
+			Decay:        0.02,
+			SpawnRate:    0.3,
+			ReactToBass:  true,
+			Fill:         false,
+			Wobble:       true,
+			WobbleAmount: 0.3,
+			ColorByAge:   true,
+		},
+
+		// Wave state
+		rings: make([]Ring, 0, 30),
+
 		// Settings menu
 		settingsMenu: SettingsMenu{
 			Visible:    false,
@@ -336,6 +554,35 @@ func NewVisualizer(cfg *config.Config, configPath string) *Visualizer {
 		dialDamping:      1.0,  // Full reactivity
 		dialFreqShift:    0.0,  // Center = no shift
 		dialBands:        64.0, // Default bands
+
+		// Bar mode dial values
+		dialBarWidth:  0.8,
+		dialBarGap:    2.0,
+		dialMinHeight: 2.0,
+
+		// Rising mode dial values
+		dialGravity:     0.08,
+		dialBounce:      0.2,
+		dialTrailLength: 8.0,
+		dialPeakHold:    30.0,
+
+		// Particles mode dial values
+		dialParticleSpawn:   2.0,
+		dialParticleGravity: 0.15,
+		dialParticleSpeed:   8.0,
+		dialParticleLife:    2.0,
+		dialParticleSize:    4.0,
+
+		// Circular mode dial values
+		dialCircularRadius:   80.0,
+		dialCircularBarLen:   150.0,
+		dialCircularRotSpeed: 0.5,
+
+		// Wave mode dial values
+		dialWaveSpeed:  4.0,
+		dialWaveWidth:  3.0,
+		dialWaveDecay:  0.02,
+		dialWaveWobble: 0.3,
 
 		// Colors matching Python version
 		bgColor:       color.RGBA{10, 10, 15, 255},
@@ -472,7 +719,7 @@ func (v *Visualizer) Update() error {
 	}
 
 	// Update isometric rotation (animate Y-axis rotation) if auto-rotate is enabled
-	if v.vizMode == 2 && v.isometric.AutoRotate {
+	if v.vizMode == 4 && v.isometric.AutoRotate {
 		v.isometric.Rotation += v.isometric.RotationSpeed
 		if v.isometric.Rotation >= 360 {
 			v.isometric.Rotation -= 360
@@ -483,7 +730,7 @@ func (v *Visualizer) Update() error {
 	}
 
 	// Update forward motion offset
-	if v.vizMode == 2 && v.isometric.ForwardMotion {
+	if v.vizMode == 4 && v.isometric.ForwardMotion {
 		v.isometric.ForwardOffset += v.isometric.ForwardSpeed
 	}
 
@@ -860,28 +1107,53 @@ func (v *Visualizer) getDialControls() []DialControl {
 		{"damping", "Damping", &v.dialDamping, 0.1, 1.0, 0.05, "%.2f"},
 		{"freqshift", "Freq Shift", &v.dialFreqShift, -100.0, 100.0, 5.0, "%+.0f%%"},
 		{"bands", "Bands", &v.dialBands, 16.0, 256.0, 8.0, "%.0f"},
-		{"thickness", "Thickness", &v.dialThickness, 0.5, 8.0, 0.5, "%.1f"},
-		{"glowsize", "Glow Size", &v.dialGlowSize, 1.0, 8.0, 0.5, "%.1f"},
 	}
 
-	// Line mode (0): Add overlay controls
+	// Line mode (0): Add line-specific controls
 	if v.vizMode == 0 {
 		return append(commonDials, []DialControl{
+			{"thickness", "Thickness", &v.dialThickness, 0.5, 8.0, 0.5, "%.1f"},
+			{"glowsize", "Glow Size", &v.dialGlowSize, 1.0, 8.0, 0.5, "%.1f"},
 			{"overlays", "Overlays", &v.dialOverlayCnt, 1.0, 50.0, 1.0, "%.0f"},
 			{"overlayoff", "Overlay Gap", &v.dialOverlayOff, 2.0, 60.0, 2.0, "%.0f"},
 		}...)
 	}
 
-	// Spiral mode (1): Add spiral-specific rotations control
+	// Bars mode (1): Add bar-specific controls
 	if v.vizMode == 1 {
 		return append(commonDials, []DialControl{
+			{"barwidth", "Bar Width", &v.dialBarWidth, 0.3, 1.0, 0.05, "%.0f%%"},
+			{"bargap", "Bar Gap", &v.dialBarGap, 0.0, 10.0, 0.5, "%.1f"},
+			{"minheight", "Min Height", &v.dialMinHeight, 0.0, 20.0, 1.0, "%.0f"},
+			{"glowsize", "Glow Size", &v.dialGlowSize, 0.0, 8.0, 0.5, "%.1f"},
+		}...)
+	}
+
+	// Rising mode (2): Add rising-specific controls
+	if v.vizMode == 2 {
+		return append(commonDials, []DialControl{
+			{"thickness", "Thickness", &v.dialThickness, 0.5, 8.0, 0.5, "%.1f"},
+			{"gravity", "Gravity", &v.dialGravity, 0.01, 0.3, 0.01, "%.2f"},
+			{"bounce", "Bounce", &v.dialBounce, 0.0, 0.5, 0.05, "%.2f"},
+			{"traillength", "Trail", &v.dialTrailLength, 0.0, 20.0, 1.0, "%.0f"},
+			{"peakhold", "Peak Hold", &v.dialPeakHold, 0.0, 120.0, 5.0, "%.0f"},
+		}...)
+	}
+
+	// Spiral mode (3): Add spiral-specific rotations control
+	if v.vizMode == 3 {
+		return append(commonDials, []DialControl{
+			{"thickness", "Thickness", &v.dialThickness, 0.5, 8.0, 0.5, "%.1f"},
+			{"glowsize", "Glow Size", &v.dialGlowSize, 1.0, 8.0, 0.5, "%.1f"},
 			{"overlays", "Rotations", &v.dialOverlayCnt, 1.0, 10.0, 1.0, "%.0f"},
 		}...)
 	}
 
-	// Isometric mode (2): Add isometric-specific controls
-	if v.vizMode == 2 {
+	// Isometric mode (4): Add isometric-specific controls
+	if v.vizMode == 4 {
 		return append(commonDials, []DialControl{
+			{"thickness", "Thickness", &v.dialThickness, 0.5, 8.0, 0.5, "%.1f"},
+			{"glowsize", "Glow Size", &v.dialGlowSize, 1.0, 8.0, 0.5, "%.1f"},
 			{"overlays", "Overlays", &v.dialOverlayCnt, 1.0, 50.0, 1.0, "%.0f"},
 			{"overlayoff", "Overlay Gap", &v.dialOverlayOff, 2.0, 60.0, 2.0, "%.0f"},
 			{"depthlayers", "Depth Layers", &v.dialDepthLayers, 2.0, 30.0, 1.0, "%.0f"},
@@ -890,6 +1162,37 @@ func (v *Visualizer) getDialControls() []DialControl {
 			{"rotation", "Rotation", &v.dialRotation, -180.0, 180.0, 5.0, "%.0f°"},
 			{"rotspeed", "Rot Speed", &v.dialRotSpeed, -2.0, 2.0, 0.1, "%.1f"},
 			{"forward", "Forward", &v.dialForwardSpeed, -2.0, 2.0, 0.1, "%.1f"},
+		}...)
+	}
+
+	// Particles mode (5): Add particle-specific controls
+	if v.vizMode == 5 {
+		return append(commonDials, []DialControl{
+			{"particlespawn", "Spawn Rate", &v.dialParticleSpawn, 0.5, 10.0, 0.5, "%.1f"},
+			{"particlegravity", "Gravity", &v.dialParticleGravity, 0.0, 0.5, 0.02, "%.2f"},
+			{"particlespeed", "Speed", &v.dialParticleSpeed, 2.0, 20.0, 1.0, "%.0f"},
+			{"particlelife", "Lifetime", &v.dialParticleLife, 0.5, 5.0, 0.25, "%.2f"},
+			{"particlesize", "Size", &v.dialParticleSize, 1.0, 12.0, 0.5, "%.1f"},
+		}...)
+	}
+
+	// Circular mode (6): Add circular-specific controls
+	if v.vizMode == 6 {
+		return append(commonDials, []DialControl{
+			{"circularradius", "Inner Radius", &v.dialCircularRadius, 20.0, 200.0, 10.0, "%.0f"},
+			{"circularbarlen", "Bar Length", &v.dialCircularBarLen, 50.0, 300.0, 10.0, "%.0f"},
+			{"circularrotspeed", "Rotation", &v.dialCircularRotSpeed, -2.0, 2.0, 0.1, "%.1f"},
+			{"thickness", "Bar Width", &v.dialThickness, 1.0, 12.0, 0.5, "%.1f"},
+		}...)
+	}
+
+	// Wave mode (7): Add wave-specific controls
+	if v.vizMode == 7 {
+		return append(commonDials, []DialControl{
+			{"wavespeed", "Speed", &v.dialWaveSpeed, 1.0, 15.0, 0.5, "%.1f"},
+			{"wavewidth", "Width", &v.dialWaveWidth, 1.0, 10.0, 0.5, "%.1f"},
+			{"wavedecay", "Decay", &v.dialWaveDecay, 0.005, 0.1, 0.005, "%.3f"},
+			{"wavewobble", "Wobble", &v.dialWaveWobble, 0.0, 1.0, 0.1, "%.1f"},
 		}...)
 	}
 
@@ -951,6 +1254,51 @@ func (v *Visualizer) applyDialValue(dialIndex int) {
 	case "forward":
 		v.isometric.ForwardSpeed = float32(v.dialForwardSpeed)
 		v.isometric.ForwardMotion = v.dialForwardSpeed != 0
+	// Bar mode settings
+	case "barwidth":
+		v.barSettings.BarWidth = float32(v.dialBarWidth)
+	case "bargap":
+		v.barSettings.GapWidth = float32(v.dialBarGap)
+	case "minheight":
+		v.barSettings.MinHeight = float32(v.dialMinHeight)
+	// Rising mode settings
+	case "gravity":
+		v.rising.Gravity = float32(v.dialGravity)
+	case "bounce":
+		v.rising.Bounce = float32(v.dialBounce)
+	case "traillength":
+		v.rising.TrailLength = int(v.dialTrailLength)
+	case "peakhold":
+		v.rising.PeakHold = int(v.dialPeakHold)
+	// Particles mode settings
+	case "particlespawn":
+		v.particles.SpawnRate = float32(v.dialParticleSpawn)
+	case "particlegravity":
+		v.particles.Gravity = float32(v.dialParticleGravity)
+	case "particlespeed":
+		v.particles.InitialSpeed = float32(v.dialParticleSpeed)
+	case "particlelife":
+		v.particles.MaxLife = float32(v.dialParticleLife)
+	case "particlesize":
+		v.particles.SizeMax = float32(v.dialParticleSize)
+		v.particles.SizeMin = float32(v.dialParticleSize) * 0.5
+	// Circular mode settings
+	case "circularradius":
+		v.circular.InnerRadius = float32(v.dialCircularRadius)
+	case "circularbarlen":
+		v.circular.BarLength = float32(v.dialCircularBarLen)
+	case "circularrotspeed":
+		v.circular.RotationSpeed = float32(v.dialCircularRotSpeed)
+	// Wave mode settings
+	case "wavespeed":
+		v.wave.RingSpeed = float32(v.dialWaveSpeed)
+	case "wavewidth":
+		v.wave.RingWidth = float32(v.dialWaveWidth)
+	case "wavedecay":
+		v.wave.Decay = float32(v.dialWaveDecay)
+	case "wavewobble":
+		v.wave.WobbleAmount = float32(v.dialWaveWobble)
+		v.wave.Wobble = v.dialWaveWobble > 0
 	}
 }
 
@@ -1018,6 +1366,70 @@ func (v *Visualizer) resetDialToDefault(dialIndex int) {
 		v.dialForwardSpeed = 0.0
 		v.isometric.ForwardSpeed = 0.0
 		v.isometric.ForwardMotion = false
+	// Bar mode resets
+	case "barwidth":
+		v.dialBarWidth = 0.8
+		v.barSettings.BarWidth = 0.8
+	case "bargap":
+		v.dialBarGap = 2.0
+		v.barSettings.GapWidth = 2.0
+	case "minheight":
+		v.dialMinHeight = 2.0
+		v.barSettings.MinHeight = 2.0
+	// Rising mode resets
+	case "gravity":
+		v.dialGravity = 0.08
+		v.rising.Gravity = 0.08
+	case "bounce":
+		v.dialBounce = 0.2
+		v.rising.Bounce = 0.2
+	case "traillength":
+		v.dialTrailLength = 8.0
+		v.rising.TrailLength = 8
+	case "peakhold":
+		v.dialPeakHold = 30.0
+		v.rising.PeakHold = 30
+	// Particles mode resets
+	case "particlespawn":
+		v.dialParticleSpawn = 2.0
+		v.particles.SpawnRate = 2.0
+	case "particlegravity":
+		v.dialParticleGravity = 0.15
+		v.particles.Gravity = 0.15
+	case "particlespeed":
+		v.dialParticleSpeed = 8.0
+		v.particles.InitialSpeed = 8.0
+	case "particlelife":
+		v.dialParticleLife = 2.0
+		v.particles.MaxLife = 2.0
+	case "particlesize":
+		v.dialParticleSize = 4.0
+		v.particles.SizeMax = 6.0
+		v.particles.SizeMin = 2.0
+	// Circular mode resets
+	case "circularradius":
+		v.dialCircularRadius = 80.0
+		v.circular.InnerRadius = 80.0
+	case "circularbarlen":
+		v.dialCircularBarLen = 150.0
+		v.circular.BarLength = 150.0
+	case "circularrotspeed":
+		v.dialCircularRotSpeed = 0.5
+		v.circular.RotationSpeed = 0.5
+	// Wave mode resets
+	case "wavespeed":
+		v.dialWaveSpeed = 4.0
+		v.wave.RingSpeed = 4.0
+	case "wavewidth":
+		v.dialWaveWidth = 3.0
+		v.wave.RingWidth = 3.0
+	case "wavedecay":
+		v.dialWaveDecay = 0.02
+		v.wave.Decay = 0.02
+	case "wavewobble":
+		v.dialWaveWobble = 0.3
+		v.wave.WobbleAmount = 0.3
+		v.wave.Wobble = true
 	}
 	v.showStatus("Reset to default")
 }
@@ -1034,6 +1446,12 @@ func (v *Visualizer) resizeSpectrumBuffers(numBands int) {
 	for i := range v.spectrumHistory {
 		v.spectrumHistory[i] = make([]float64, numBands)
 	}
+
+	// Resize rising line buffers
+	v.risingPositions = make([]float64, numBands)
+	v.risingVelocities = make([]float64, numBands)
+	v.risingPeaks = make([]float64, numBands)
+	v.risingPeakHold = make([]int, numBands)
 }
 
 func (v *Visualizer) selectDevice(index int) {
@@ -1181,14 +1599,22 @@ func (v *Visualizer) Draw(screen *ebiten.Image) {
 	v.mu.RUnlock()
 
 	if len(spectrum) > 1 {
-		if v.vizMode == 1 {
-			// Spiral visualization mode
+		switch v.vizMode {
+		case 1: // Bars visualization mode
+			v.drawBars(screen, spectrum, preset, centerY)
+		case 2: // Rising line visualization mode
+			v.drawRising(screen, spectrum, preset, centerY)
+		case 3: // Spiral visualization mode
 			v.drawSpiral(screen, spectrum, preset)
-		} else if v.vizMode == 2 {
-			// Isometric 3D rendering
+		case 4: // Isometric 3D rendering
 			v.drawIsometric(screen, spectrum, historySpectrums, preset, centerY)
-		} else {
-			// Standard 2D rendering with overlays
+		case 5: // Particles visualization mode
+			v.drawParticles(screen, spectrum, preset, centerY)
+		case 6: // Circular visualization mode
+			v.drawCircular(screen, spectrum, preset)
+		case 7: // Wave visualization mode
+			v.drawWave(screen, spectrum, preset)
+		default: // Line mode (0) - Standard 2D rendering with overlays
 			for i := v.overlay.Count - 1; i >= 0; i-- {
 				// Determine which spectrum to draw
 				// If SyncLines is enabled, all lines use the same current spectrum (no overlap)
@@ -1224,6 +1650,573 @@ func (v *Visualizer) Draw(screen *ebiten.Image) {
 
 	// Draw UI
 	v.drawUI(screen)
+}
+
+// drawBars renders the spectrum as vertical bars
+func (v *Visualizer) drawBars(screen *ebiten.Image, spectrum []float64, preset ColorPreset, centerY float32) {
+	numBars := len(spectrum)
+	if numBars < 1 {
+		return
+	}
+
+	// Calculate bar dimensions
+	totalWidth := float32(v.width)
+	barSpacing := totalWidth / float32(numBars)
+	barWidth := barSpacing * v.barSettings.BarWidth
+	gap := v.barSettings.GapWidth
+
+	// Adjust bar width to account for gap
+	if barWidth > barSpacing-gap {
+		barWidth = barSpacing - gap
+	}
+
+	// Get colors
+	lineColor, mirrorColor, glowColor := v.getOverlayColors(preset, 0, 255)
+
+	// Apply frequency shift
+	shiftAmount := int(v.freqShift * float64(numBars) * 0.5)
+
+	maxHeight := float32(v.height) * 0.45 // Max bar height (from center to edge)
+
+	for i := 0; i < numBars; i++ {
+		// Get spectrum value with shift
+		shiftedIdx := (i + shiftAmount + numBars) % numBars
+		amp := float32(spectrum[shiftedIdx])
+
+		// Calculate bar height
+		barHeight := amp * maxHeight
+		if barHeight < v.barSettings.MinHeight {
+			barHeight = v.barSettings.MinHeight
+		}
+
+		// Calculate bar position
+		barX := float32(i)*barSpacing + (barSpacing-barWidth)/2
+
+		// Calculate gradient color based on amplitude if enabled
+		barColor := lineColor
+		if v.barSettings.Gradient {
+			// Interpolate from mirror color (low) to line color (high)
+			t := amp
+			if t > 1 {
+				t = 1
+			}
+			barColor = color.RGBA{
+				R: uint8(float32(mirrorColor.R) + t*float32(lineColor.R-mirrorColor.R)),
+				G: uint8(float32(mirrorColor.G) + t*float32(lineColor.G-mirrorColor.G)),
+				B: uint8(float32(mirrorColor.B) + t*float32(lineColor.B-mirrorColor.B)),
+				A: 255,
+			}
+		}
+
+		// Draw glow behind bar if enabled
+		if v.barSettings.GlowEnabled && v.lineStyle.GlowSize > 0 {
+			glowExpand := v.lineStyle.GlowSize
+			glowBarColor := glowColor
+			glowBarColor.A = 60
+
+			// Upper glow
+			vector.DrawFilledRect(screen, barX-glowExpand, centerY-barHeight-glowExpand,
+				barWidth+glowExpand*2, barHeight+glowExpand, glowBarColor, false)
+
+			// Lower glow (mirror)
+			if v.barSettings.Mirror {
+				vector.DrawFilledRect(screen, barX-glowExpand, centerY,
+					barWidth+glowExpand*2, barHeight+glowExpand, glowBarColor, false)
+			}
+		}
+
+		// Draw upper bar (above center line)
+		if v.barSettings.RoundedCaps {
+			// Draw rounded cap (circle at top)
+			capRadius := barWidth / 2
+			capY := centerY - barHeight
+			vector.DrawFilledCircle(screen, barX+barWidth/2, capY, capRadius, barColor, true)
+			// Draw rectangle body below cap
+			if barHeight > capRadius {
+				vector.DrawFilledRect(screen, barX, capY, barWidth, barHeight-capRadius+1, barColor, false)
+			}
+		} else {
+			vector.DrawFilledRect(screen, barX, centerY-barHeight, barWidth, barHeight, barColor, false)
+		}
+
+		// Draw outline if enabled
+		if v.barSettings.Outline {
+			outlineColor := color.RGBA{255, 255, 255, 100}
+			vector.StrokeRect(screen, barX, centerY-barHeight, barWidth, barHeight, v.barSettings.OutlineWidth, outlineColor, false)
+		}
+
+		// Draw lower bar (mirror below center line) if enabled
+		if v.barSettings.Mirror {
+			mirrorBarColor := mirrorColor
+			if v.barSettings.Gradient {
+				t := amp
+				if t > 1 {
+					t = 1
+				}
+				// Dimmer gradient for mirror
+				mirrorBarColor = color.RGBA{
+					R: uint8(float32(mirrorColor.R) * (0.5 + 0.5*t)),
+					G: uint8(float32(mirrorColor.G) * (0.5 + 0.5*t)),
+					B: uint8(float32(mirrorColor.B) * (0.5 + 0.5*t)),
+					A: 200,
+				}
+			}
+
+			if v.barSettings.RoundedCaps {
+				capRadius := barWidth / 2
+				capY := centerY + barHeight
+				vector.DrawFilledCircle(screen, barX+barWidth/2, capY, capRadius, mirrorBarColor, true)
+				if barHeight > capRadius {
+					vector.DrawFilledRect(screen, barX, centerY, barWidth, barHeight-capRadius+1, mirrorBarColor, false)
+				}
+			} else {
+				vector.DrawFilledRect(screen, barX, centerY, barWidth, barHeight, mirrorBarColor, false)
+			}
+		}
+	}
+}
+
+// drawRising renders the spectrum as a line that rises with audio and falls with gravity
+func (v *Visualizer) drawRising(screen *ebiten.Image, spectrum []float64, preset ColorPreset, centerY float32) {
+	numPoints := len(spectrum)
+	if numPoints < 2 {
+		return
+	}
+
+	// Ensure buffers are the right size
+	if len(v.risingPositions) != numPoints {
+		v.risingPositions = make([]float64, numPoints)
+		v.risingVelocities = make([]float64, numPoints)
+		v.risingPeaks = make([]float64, numPoints)
+		v.risingPeakHold = make([]int, numPoints)
+	}
+
+	// Apply frequency shift
+	shiftAmount := int(v.freqShift * float64(numPoints) * 0.5)
+
+	maxHeight := float64(v.height) * 0.4
+
+	// Update physics for each point
+	for i := 0; i < numPoints; i++ {
+		// Get spectrum value with shift
+		shiftedIdx := (i + shiftAmount + numPoints) % numPoints
+		targetHeight := spectrum[shiftedIdx] * maxHeight
+
+		// Current position
+		currentPos := v.risingPositions[i]
+		currentVel := v.risingVelocities[i]
+
+		// If spectrum is pushing up higher than current position
+		if targetHeight > currentPos {
+			// Rise quickly to meet the target
+			riseSpeed := (targetHeight - currentPos) * float64(v.rising.MaxRise)
+			currentVel = riseSpeed
+			currentPos = targetHeight
+		} else {
+			// Apply gravity (fall)
+			currentVel -= float64(v.rising.Gravity)
+			currentPos += currentVel
+
+			// Bounce off the bottom
+			if currentPos < 0 {
+				currentPos = 0
+				if currentVel < 0 {
+					currentVel = -currentVel * float64(v.rising.Bounce)
+				}
+			}
+		}
+
+		// Update state
+		v.risingPositions[i] = currentPos
+		v.risingVelocities[i] = currentVel
+
+		// Update peaks
+		if currentPos > v.risingPeaks[i] {
+			v.risingPeaks[i] = currentPos
+			v.risingPeakHold[i] = v.rising.PeakHold
+		} else if v.risingPeakHold[i] > 0 {
+			v.risingPeakHold[i]--
+		} else {
+			// Peak falls
+			v.risingPeaks[i] -= float64(v.rising.PeakFallRate) * maxHeight
+			if v.risingPeaks[i] < 0 {
+				v.risingPeaks[i] = 0
+			}
+		}
+	}
+
+	// Get colors
+	lineColor, mirrorColor, glowColor := v.getOverlayColors(preset, 0, 255)
+
+	pointSpacing := float32(v.width) / float32(numPoints-1)
+
+	// Draw trail if enabled
+	if v.rising.TrailEnabled && v.rising.TrailLength > 0 {
+		for t := v.rising.TrailLength; t >= 1; t-- {
+			trailAlpha := uint8(float32(80) * (1.0 - float32(t)/float32(v.rising.TrailLength+1)))
+			trailColor := color.RGBA{lineColor.R, lineColor.G, lineColor.B, trailAlpha}
+			trailOffset := float32(t) * 2.0
+
+			// Draw trail line
+			for i := 0; i < numPoints-1; i++ {
+				x1 := float32(i) * pointSpacing
+				x2 := float32(i+1) * pointSpacing
+				y1 := centerY - float32(v.risingPositions[i]) + trailOffset
+				y2 := centerY - float32(v.risingPositions[i+1]) + trailOffset
+
+				vector.StrokeLine(screen, x1, y1, x2, y2, v.lineStyle.Thickness*0.5, trailColor, true)
+			}
+		}
+	}
+
+	// Draw glow
+	if v.lineStyle.GlowEnabled {
+		glowThickness := v.lineStyle.Thickness * v.lineStyle.GlowSize
+		for i := 0; i < numPoints-1; i++ {
+			x1 := float32(i) * pointSpacing
+			x2 := float32(i+1) * pointSpacing
+			y1 := centerY - float32(v.risingPositions[i])
+			y2 := centerY - float32(v.risingPositions[i+1])
+
+			vector.StrokeLine(screen, x1, y1, x2, y2, glowThickness, glowColor, true)
+		}
+	}
+
+	// Draw main rising line
+	for i := 0; i < numPoints-1; i++ {
+		x1 := float32(i) * pointSpacing
+		x2 := float32(i+1) * pointSpacing
+		y1 := centerY - float32(v.risingPositions[i])
+		y2 := centerY - float32(v.risingPositions[i+1])
+
+		vector.StrokeLine(screen, x1, y1, x2, y2, v.lineStyle.Thickness, lineColor, true)
+	}
+
+	// Draw mirror (below center)
+	for i := 0; i < numPoints-1; i++ {
+		x1 := float32(i) * pointSpacing
+		x2 := float32(i+1) * pointSpacing
+		y1 := centerY + float32(v.risingPositions[i])*0.5
+		y2 := centerY + float32(v.risingPositions[i+1])*0.5
+
+		vector.StrokeLine(screen, x1, y1, x2, y2, v.lineStyle.Thickness*0.6, mirrorColor, true)
+	}
+
+	// Draw peak markers if enabled
+	if v.rising.Peaks {
+		peakColor := lineColor
+		peakColor.A = 200
+		for i := 0; i < numPoints; i++ {
+			if v.risingPeaks[i] > 0 {
+				x := float32(i) * pointSpacing
+				y := centerY - float32(v.risingPeaks[i])
+				// Draw small peak marker
+				vector.DrawFilledCircle(screen, x, y, 2, peakColor, true)
+			}
+		}
+	}
+}
+
+// drawParticles renders an explosive particle system driven by the spectrum
+func (v *Visualizer) drawParticles(screen *ebiten.Image, spectrum []float64, preset ColorPreset, centerY float32) {
+	numBands := len(spectrum)
+	if numBands < 1 {
+		return
+	}
+
+	// Get base colors
+	lineColor, _, glowColor := v.getOverlayColors(preset, 0, 255)
+
+	// Spawn new particles based on spectrum
+	bandWidth := float32(v.width) / float32(numBands)
+	for i := 0; i < numBands; i++ {
+		amp := spectrum[i]
+		if amp > 0.1 { // Only spawn if there's significant audio
+			// Spawn rate based on amplitude
+			spawnChance := amp * float64(v.particles.SpawnRate)
+			for spawnChance > 0 {
+				if spawnChance >= 1 || (spawnChance > 0 && float64(v.frameCount%10)/10.0 < spawnChance) {
+					if len(v.particleList) < v.particles.MaxParticles {
+						// Create new particle
+						x := float32(i)*bandWidth + bandWidth/2
+						speedVariance := (float32(v.frameCount%100)/100.0 - 0.5) * v.particles.SpeedVariance
+						spreadAngle := (float32(v.frameCount%100)/100.0 - 0.5) * v.particles.Spread
+
+						p := Particle{
+							X:        x,
+							Y:        centerY,
+							VX:       spreadAngle * v.particles.InitialSpeed * 0.5,
+							VY:       -(v.particles.InitialSpeed + speedVariance) * float32(amp),
+							Life:     1.0,
+							Size:     v.particles.SizeMin + (v.particles.SizeMax-v.particles.SizeMin)*float32(amp),
+							ColorIdx: i,
+						}
+						v.particleList = append(v.particleList, p)
+					}
+				}
+				spawnChance -= 1
+			}
+		}
+	}
+
+	// Update and draw particles
+	aliveParticles := make([]Particle, 0, len(v.particleList))
+	for _, p := range v.particleList {
+		// Apply gravity
+		p.VY += v.particles.Gravity
+
+		// Update position
+		p.X += p.VX
+		p.Y += p.VY
+
+		// Decay life
+		lifeDecay := 1.0 / (float32(60) * v.particles.MaxLife)
+		p.Life -= lifeDecay
+
+		// Keep if still alive and on screen
+		if p.Life > 0 && p.Y < float32(v.height)+50 && p.Y > -50 && p.X > -50 && p.X < float32(v.width)+50 {
+			aliveParticles = append(aliveParticles, p)
+
+			// Calculate color based on position in spectrum (rainbow effect)
+			var particleColor color.RGBA
+			if v.circular.Rainbow || preset.Name == "Rainbow" {
+				hue := float64(p.ColorIdx) / float64(numBands) * 360
+				particleColor = hueToRGB(hue, 1.0, 1.0)
+			} else {
+				particleColor = lineColor
+			}
+
+			// Fade alpha based on life
+			alpha := uint8(255)
+			if v.particles.FadeOut {
+				alpha = uint8(p.Life * 255)
+			}
+			particleColor.A = alpha
+
+			// Draw glow if enabled
+			if v.particles.Glow {
+				glowParticle := glowColor
+				glowParticle.A = uint8(float32(alpha) * 0.3)
+				vector.DrawFilledCircle(screen, p.X, p.Y, p.Size*1.5, glowParticle, true)
+			}
+
+			// Draw particle
+			vector.DrawFilledCircle(screen, p.X, p.Y, p.Size*p.Life, particleColor, true)
+		}
+	}
+	v.particleList = aliveParticles
+}
+
+// drawCircular renders a circular/radial bar visualizer
+func (v *Visualizer) drawCircular(screen *ebiten.Image, spectrum []float64, preset ColorPreset) {
+	numBands := len(spectrum)
+	if numBands < 1 {
+		return
+	}
+
+	centerX := float32(v.width) / 2
+	centerY := float32(v.height) / 2
+
+	// Update rotation
+	v.circular.Rotation += v.circular.RotationSpeed
+	if v.circular.Rotation >= 360 {
+		v.circular.Rotation -= 360
+	}
+
+	// Get base colors
+	lineColor, mirrorColor, glowColor := v.getOverlayColors(preset, 0, 255)
+
+	// Angle per band
+	angleStep := 2 * math.Pi / float64(numBands)
+	baseAngle := float64(v.circular.Rotation) * math.Pi / 180
+
+	for i := 0; i < numBands; i++ {
+		amp := float32(spectrum[i])
+		angle := baseAngle + float64(i)*angleStep
+
+		// Calculate bar color
+		var barColor color.RGBA
+		if v.circular.Rainbow {
+			hue := float64(i) / float64(numBands) * 360
+			barColor = hueToRGB(hue, 1.0, 0.9)
+		} else {
+			barColor = lineColor
+		}
+
+		// Calculate bar length based on amplitude
+		barLength := amp * v.circular.BarLength
+
+		// Inner and outer points
+		innerR := v.circular.InnerRadius
+		outerR := innerR + barLength
+
+		// Calculate positions
+		cosA := float32(math.Cos(angle))
+		sinA := float32(math.Sin(angle))
+
+		innerX := centerX + innerR*cosA
+		innerY := centerY + innerR*sinA
+		outerX := centerX + outerR*cosA
+		outerY := centerY + outerR*sinA
+
+		if v.circular.Dots {
+			// Draw dots at the end of each "bar"
+			dotSize := v.circular.DotSize * (0.5 + amp*0.5)
+
+			// Glow
+			glowDot := glowColor
+			glowDot.A = 80
+			vector.DrawFilledCircle(screen, outerX, outerY, dotSize*1.5, glowDot, true)
+
+			// Main dot
+			vector.DrawFilledCircle(screen, outerX, outerY, dotSize, barColor, true)
+
+			// Mirror dot (inner)
+			if v.circular.Mirror {
+				mirrorR := innerR - barLength*0.5
+				if mirrorR < 10 {
+					mirrorR = 10
+				}
+				mirrorX := centerX + mirrorR*cosA
+				mirrorY := centerY + mirrorR*sinA
+				mirrorDot := mirrorColor
+				mirrorDot.A = 180
+				vector.DrawFilledCircle(screen, mirrorX, mirrorY, dotSize*0.7, mirrorDot, true)
+			}
+		} else {
+			// Draw bars
+			thickness := v.lineStyle.Thickness
+
+			// Glow
+			if v.lineStyle.GlowEnabled {
+				glowBar := glowColor
+				glowBar.A = 60
+				vector.StrokeLine(screen, innerX, innerY, outerX, outerY, thickness*v.lineStyle.GlowSize, glowBar, true)
+			}
+
+			// Main bar
+			vector.StrokeLine(screen, innerX, innerY, outerX, outerY, thickness, barColor, true)
+
+			// Mirror bar (inward)
+			if v.circular.Mirror {
+				mirrorR := innerR - barLength*0.4
+				if mirrorR < 5 {
+					mirrorR = 5
+				}
+				mirrorX := centerX + mirrorR*cosA
+				mirrorY := centerY + mirrorR*sinA
+				mirrorBar := mirrorColor
+				mirrorBar.A = 180
+				vector.StrokeLine(screen, centerX+innerR*0.9*cosA, centerY+innerR*0.9*sinA, mirrorX, mirrorY, thickness*0.6, mirrorBar, true)
+			}
+		}
+	}
+
+	// Draw center circle
+	vector.StrokeCircle(screen, centerX, centerY, v.circular.InnerRadius*0.9, 1, color.RGBA{60, 60, 60, 255}, true)
+}
+
+// drawWave renders concentric wave rings that pulse outward
+func (v *Visualizer) drawWave(screen *ebiten.Image, spectrum []float64, preset ColorPreset) {
+	numBands := len(spectrum)
+	if numBands < 1 {
+		return
+	}
+
+	centerX := float32(v.width) / 2
+	centerY := float32(v.height) / 2
+	maxRadius := float32(math.Sqrt(float64(v.width*v.width+v.height*v.height))) / 2
+
+	// Get colors
+	lineColor, _, glowColor := v.getOverlayColors(preset, 0, 255)
+
+	// Calculate average intensity (or bass for bass-reactive mode)
+	var intensity float64
+	if v.wave.ReactToBass {
+		// Focus on lower frequencies (first 1/4 of spectrum)
+		bassEnd := numBands / 4
+		if bassEnd < 1 {
+			bassEnd = 1
+		}
+		for i := 0; i < bassEnd; i++ {
+			intensity += spectrum[i]
+		}
+		intensity /= float64(bassEnd)
+	} else {
+		// Average of all frequencies
+		for _, amp := range spectrum {
+			intensity += amp
+		}
+		intensity /= float64(numBands)
+	}
+
+	// Spawn new rings based on intensity
+	if intensity > 0.15 {
+		spawnChance := intensity * float64(v.wave.SpawnRate)
+		if spawnChance > 0 && (len(v.rings) == 0 || v.rings[len(v.rings)-1].Radius > v.wave.RingSpeed*5) {
+			if len(v.rings) < v.wave.MaxRings {
+				v.rings = append(v.rings, Ring{
+					Radius:    1,
+					Intensity: float32(intensity),
+					Age:       0,
+				})
+			}
+		}
+	}
+
+	// Update and draw rings
+	aliveRings := make([]Ring, 0, len(v.rings))
+	for _, ring := range v.rings {
+		// Update ring
+		ring.Radius += v.wave.RingSpeed
+		ring.Age += v.wave.Decay
+
+		// Keep if still visible
+		if ring.Age < 1.0 && ring.Radius < maxRadius {
+			aliveRings = append(aliveRings, ring)
+
+			// Calculate alpha based on age
+			alpha := uint8((1.0 - ring.Age) * 255 * float32(ring.Intensity))
+
+			// Calculate color
+			var ringColor color.RGBA
+			if v.wave.ColorByAge {
+				// Color shifts from line color to dim as it ages
+				hue := float64((v.frameCount + int(ring.Radius)) % 360)
+				ringColor = hueToRGB(hue, 1.0-float64(ring.Age)*0.5, 1.0-float64(ring.Age)*0.3)
+			} else {
+				ringColor = lineColor
+			}
+			ringColor.A = alpha
+
+			// Apply wobble if enabled
+			radius := ring.Radius
+			if v.wave.Wobble {
+				wobbleOffset := float32(math.Sin(float64(ring.Radius)*0.1+float64(v.frameCount)*0.1)) * v.wave.WobbleAmount * 20
+				radius += wobbleOffset
+			}
+
+			// Draw glow
+			glowRing := glowColor
+			glowRing.A = alpha / 3
+			vector.StrokeCircle(screen, centerX, centerY, radius, v.wave.RingWidth*2, glowRing, true)
+
+			// Draw ring
+			if v.wave.Fill {
+				// Filled ring (actually a thick stroke)
+				vector.StrokeCircle(screen, centerX, centerY, radius, v.wave.RingWidth*3, ringColor, true)
+			} else {
+				vector.StrokeCircle(screen, centerX, centerY, radius, v.wave.RingWidth, ringColor, true)
+			}
+		}
+	}
+	v.rings = aliveRings
+
+	// Draw center pulse indicator
+	pulseSize := float32(20 + intensity*40)
+	pulseColor := lineColor
+	pulseColor.A = uint8(intensity * 200)
+	vector.DrawFilledCircle(screen, centerX, centerY, pulseSize, pulseColor, true)
 }
 
 // drawIsometric renders the waveform in isometric 3D perspective with Y-axis rotation
@@ -2280,22 +3273,20 @@ func (v *Visualizer) drawHelp(screen *ebiten.Image) {
 		"Controls:",
 		"",
 		"ESC/Q - Exit  F - Fullscreen",
-		"H - Help  L - Style  M - Menu",
+		"H - Help  M - Settings Menu",
+		"",
+		"8 Visualization Modes:",
+		"  Line, Bars, Rising, Spiral,",
+		"  Isometric, Particles,",
+		"  Circular, Wave",
 		"",
 		"Audio:",
 		"  Dropdown - Select device",
-		"  +/- Sensitivity  [/] Smoothing",
+		"  +/- Sensitivity",
 		"",
-		"Line Style:",
-		"  T - Thickness  C - Colors",
-		"  G - Glow  B - Smooth curves",
-		"  O - Overlay lines",
+		"Press M for mode-specific",
+		"settings and customization",
 		"",
-		"Isometric 3D (I to toggle):",
-		"  D - Depth layers",
-		"  A - Angle  W - Spacing",
-		"",
-		"Sliders: Freq Shift, Bands",
 		"R - Reset  S - Save config",
 	}
 
